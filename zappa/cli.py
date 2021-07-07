@@ -7,6 +7,9 @@ Zappa CLI
 Deploy arbitrary Python programs as serverless Zappa applications.
 
 """
+
+from __future__ import unicode_literals
+from __future__ import division
 from past.builtins import basestring
 from builtins import input, bytes
 
@@ -56,7 +59,6 @@ CUSTOM_SETTINGS = [
     'delete_local_zip',
     'delete_s3_zip',
     'exclude',
-    'exclude_glob',
     'extra_permissions',
     'include',
     'role_name',
@@ -69,7 +71,7 @@ BOTO3_CONFIG_DOCS_URL = 'https://boto3.readthedocs.io/en/latest/guide/quickstart
 # Main Input Processing
 ##
 
-class ZappaCLI:
+class ZappaCLI(object):
     """
     ZappaCLI object is responsible for loading the settings,
     handling the input arguments and executing the calls to the core library.
@@ -98,7 +100,6 @@ class ZappaCLI:
     lambda_arn = None
     lambda_name = None
     lambda_description = None
-    lambda_concurrency = None
     s3_bucket_name = None
     settings_file = None
     zip_path = None
@@ -116,7 +117,6 @@ class ZappaCLI:
     aws_kms_key_arn = ''
     context_header_mappings = None
     tags = []
-    layers = None
 
     stage_name_env_pattern = re.compile('^[a-zA-Z0-9_]+$')
 
@@ -153,8 +153,8 @@ class ZappaCLI:
         settings = get_stage_setting(stage=self.api_stage)
 
         # Backwards compatible for delete_zip setting that was more explicitly named delete_local_zip
-        if 'delete_zip' in settings:
-            settings['delete_local_zip'] = settings.get('delete_zip')
+        if u'delete_zip' in settings:
+            settings[u'delete_local_zip'] = settings.get(u'delete_zip')
 
         settings.update(self.stage_config_overrides)
 
@@ -223,9 +223,6 @@ class ZappaCLI:
         # https://github.com/Miserlou/Zappa/issues/891
         group.add_argument(
             '--disable_progress', action='store_true', help='Disable progress bars.'
-        )
-        group.add_argument(
-            "--no_venv", action="store_true", help="Skip venv check."
         )
 
         ##
@@ -356,7 +353,7 @@ class ZappaCLI:
         ##
         # Status
         ##
-        subparsers.add_parser(
+        status_parser = subparsers.add_parser(
             'status', parents=[env_parser],
             help='Show deployment status and event schedules.'
         )
@@ -666,6 +663,7 @@ class ZappaCLI:
                                             authorizer=self.authorizer,
                                             cors_options=self.cors,
                                             description=self.apigateway_description,
+                                            policy=self.apigateway_policy,
                                             endpoint_configuration=self.endpoint_configuration
                                         )
 
@@ -707,16 +705,13 @@ class ZappaCLI:
             if self.manage_roles:
                 try:
                     self.zappa.create_iam_roles()
-                except botocore.client.ClientError as ce:
+                except botocore.client.ClientError:
                     raise ClickException(
                         click.style("Failed", fg="red") + " to " + click.style("manage IAM roles", bold=True) + "!\n" +
                         "You may " + click.style("lack the necessary AWS permissions", bold=True) +
                         " to automatically manage a Zappa execution role.\n" +
-                        click.style("Exception reported by AWS:", bold=True) + format(ce) + '\n' +
                         "To fix this, see here: " +
-                        click.style(
-                            "https://github.com/Miserlou/Zappa#custom-aws-iam-roles-and-policies-for-deployment",
-                            bold=True)
+                        click.style("https://github.com/Miserlou/Zappa#custom-aws-iam-roles-and-policies-for-deployment", bold=True)
                         + '\n')
 
             # Create the Lambda Zip
@@ -764,9 +759,7 @@ class ZappaCLI:
                 runtime=self.runtime,
                 aws_environment_variables=self.aws_environment_variables,
                 aws_kms_key_arn=self.aws_kms_key_arn,
-                use_alb=self.use_alb,
-                layers=self.layers,
-                concurrency=self.lambda_concurrency,
+                use_alb=self.use_alb
             )
             if source_zip and source_zip.startswith('s3://'):
                 bucket, key_name = parse_s3_url(source_zip)
@@ -940,12 +933,11 @@ class ZappaCLI:
         kwargs = dict(
             bucket=self.s3_bucket_name,
             function_name=self.lambda_name,
-            num_revisions=self.num_retained_versions,
-            concurrency=self.lambda_concurrency,
+            num_revisions=self.num_retained_versions
         )
         if source_zip and source_zip.startswith('s3://'):
             bucket, key_name = parse_s3_url(source_zip)
-            kwargs.update(dict(
+            kwargs = kwargs.update(dict(
                 bucket=bucket,
                 s3_key=key_name
             ))
@@ -975,8 +967,7 @@ class ZappaCLI:
                                                         memory_size=self.memory_size,
                                                         runtime=self.runtime,
                                                         aws_environment_variables=self.aws_environment_variables,
-                                                        aws_kms_key_arn=self.aws_kms_key_arn,
-                                                        layers=self.layers
+                                                        aws_kms_key_arn=self.aws_kms_key_arn
                                                     )
 
         # Finally, delete the local copy our zip package
@@ -1383,7 +1374,7 @@ class ZappaCLI:
             # UUIDs
             for token in final_string.replace('\t', ' ').split(' '):
                 try:
-                    if token.count('-') == 4 and token.replace('-', '').isalnum():
+                    if token.count('-') is 4 and token.replace('-', '').isalnum():
                         final_string = final_string.replace(
                             token,
                             click.style(token, fg='magenta')
@@ -1503,9 +1494,9 @@ class ZappaCLI:
             event_dict = {}
             rule_name = rule['Name']
             event_dict["Event Rule Name"] = rule_name
-            event_dict["Event Rule Schedule"] = rule.get('ScheduleExpression', None)
-            event_dict["Event Rule State"] = rule.get('State', None).title()
-            event_dict["Event Rule ARN"] = rule.get('Arn', None)
+            event_dict["Event Rule Schedule"] = rule.get(u'ScheduleExpression', None)
+            event_dict["Event Rule State"] = rule.get(u'State', None).title()
+            event_dict["Event Rule ARN"] = rule.get(u'Arn', None)
             status_dict['Events'].append(event_dict)
 
         if return_json:
@@ -1573,7 +1564,7 @@ class ZappaCLI:
             raise ClickException("This project already has a " + click.style("{0!s} file".format(settings_file), fg="red", bold=True) + "!")
 
         # Explain system.
-        click.echo(click.style("""\n███████╗ █████╗ ██████╗ ██████╗  █████╗
+        click.echo(click.style(u"""\n███████╗ █████╗ ██████╗ ██████╗  █████╗
 ╚══███╔╝██╔══██╗██╔══██╗██╔══██╗██╔══██╗
   ███╔╝ ███████║██████╔╝██████╔╝███████║
  ███╔╝  ██╔══██║██╔═══╝ ██╔═══╝ ██╔══██║
@@ -1799,7 +1790,7 @@ class ZappaCLI:
         click.echo("\nTo learn more, check out our project page on " + click.style("GitHub", bold=True) +
                    " here: " + click.style("https://github.com/Miserlou/Zappa", fg="cyan", bold=True))
         click.echo("and stop by our " + click.style("Slack", bold=True) + " channel here: " +
-                   click.style("https://zappateam.slack.com", fg="cyan", bold=True))
+                   click.style("https://slack.zappa.io", fg="cyan", bold=True))
         click.echo("\nEnjoy!,")
         click.echo(" ~ Team " + click.style("Zappa", bold=True) + "!")
 
@@ -2093,7 +2084,6 @@ class ZappaCLI:
         self.iam_authorization = self.stage_config.get('iam_authorization', False)
         self.cors = self.stage_config.get("cors", False)
         self.lambda_description = self.stage_config.get('lambda_description', "Zappa Deployment")
-        self.lambda_concurrency = self.stage_config.get('lambda_concurrency', None)
         self.environment_variables = self.stage_config.get('environment_variables', {})
         self.aws_environment_variables = self.stage_config.get('aws_environment_variables', {})
         self.check_environment(self.environment_variables)
@@ -2103,7 +2093,6 @@ class ZappaCLI:
         self.context_header_mappings = self.stage_config.get('context_header_mappings', {})
         self.xray_tracing = self.stage_config.get('xray_tracing', False)
         self.desired_role_arn = self.stage_config.get('role_arn')
-        self.layers = self.stage_config.get('layers', None)
 
         # Load ALB-related settings
         self.use_alb = self.stage_config.get('alb_enabled', False)
@@ -2185,7 +2174,7 @@ class ZappaCLI:
         if ext == '.yml' or ext == '.yaml':
             with open(settings_file) as yaml_file:
                 try:
-                    self.zappa_settings = yaml.safe_load(yaml_file)
+                    self.zappa_settings = yaml.load(yaml_file)
                 except ValueError: # pragma: no cover
                     raise ValueError("Unable to load the Zappa settings YAML. It may be malformed.")
         elif ext == '.toml':
@@ -2223,7 +2212,6 @@ class ZappaCLI:
                 prefix=self.lambda_name,
                 use_precompiled_packages=self.stage_config.get('use_precompiled_packages', True),
                 exclude=self.stage_config.get('exclude', []),
-                exclude_glob=self.stage_config.get('exclude_glob', []),
                 disable_progress=self.disable_progress,
                 archive_format='tarball'
             )
@@ -2238,20 +2226,36 @@ class ZappaCLI:
                 handler_file=handler_file,
                 slim_handler=True,
                 exclude=exclude,
-                exclude_glob=self.stage_config.get('exclude_glob', []),
                 output=output,
                 disable_progress=self.disable_progress
             )
         else:
-            # This could be python3.6 optimized.
-            exclude = self.stage_config.get(
-                    'exclude', [
-                                    "boto3",
-                                    "dateutil",
-                                    "botocore",
-                                    "s3transfer",
-                                    "concurrent"
-                                ])
+
+            # Custom excludes for different versions.
+            # Related: https://github.com/kennethreitz/requests/issues/3985
+            if sys.version_info[0] < 3:
+                # Exclude packages already builtin to the python lambda environment
+                # Related: https://github.com/Miserlou/Zappa/issues/556
+                exclude = self.stage_config.get(
+                        'exclude', [
+                                        "boto3",
+                                        "dateutil",
+                                        "botocore",
+                                        "s3transfer",
+                                        "six.py",
+                                        "jmespath",
+                                        "concurrent"
+                                    ])
+            else:
+                # This could be python3.6 optimized.
+                exclude = self.stage_config.get(
+                        'exclude', [
+                                        "boto3",
+                                        "dateutil",
+                                        "botocore",
+                                        "s3transfer",
+                                        "concurrent"
+                                    ])
 
             # Create a single zip that has the handler and application
             self.zip_path = self.zappa.create_lambda_zip(
@@ -2259,7 +2263,6 @@ class ZappaCLI:
                 handler_file=handler_file,
                 use_precompiled_packages=self.stage_config.get('use_precompiled_packages', True),
                 exclude=exclude,
-                exclude_glob=self.stage_config.get('exclude_glob', []),
                 output=output,
                 disable_progress=self.disable_progress
             )
@@ -2521,7 +2524,7 @@ class ZappaCLI:
         # IP address filter
         for token in string.replace('\t', ' ').split(' '):
             try:
-                if (token.count('.') == 3 and token.replace('.', '').isnumeric()):
+                if (token.count('.') is 3 and token.replace('.', '').isnumeric()):
                     return True
             except Exception: # pragma: no cover
                 pass
@@ -2556,14 +2559,14 @@ class ZappaCLI:
             # And UUIDs
             for token in final_string.replace('\t', ' ').split(' '):
                 try:
-                    if token.count('-') == 4 and token.replace('-', '').isalnum():
+                    if token.count('-') is 4 and token.replace('-', '').isalnum():
                         final_string = final_string.replace(token, click.style(token, fg="magenta"))
                 except Exception: # pragma: no cover
                     pass
 
                 # And IP addresses
                 try:
-                    if token.count('.') == 3 and token.replace('.', '').isnumeric():
+                    if token.count('.') is 3 and token.replace('.', '').isnumeric():
                         final_string = final_string.replace(token, click.style(token, fg="red"))
                 except Exception: # pragma: no cover
                     pass
@@ -2675,8 +2678,6 @@ class ZappaCLI:
 
     def check_venv(self):
         """ Ensure we're inside a virtualenv. """
-        if self.vargs and self.vargs.get("no_venv"):
-            return
         if self.zappa:
             venv = self.zappa.get_current_venv()
         else:
@@ -2751,7 +2752,7 @@ def shamelessly_promote():
     click.echo("File bug reports on " + click.style("GitHub", bold=True) + " here: "
                + click.style("https://github.com/Miserlou/Zappa", fg='cyan', bold=True))
     click.echo("And join our " + click.style("Slack", bold=True) + " channel here: "
-               + click.style("https://zappateam.slack.com", fg='cyan', bold=True))
+               + click.style("https://slack.zappa.io", fg='cyan', bold=True))
     click.echo("Love!,")
     click.echo(" ~ Team " + click.style("Zappa", bold=True) + "!")
 

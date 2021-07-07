@@ -5,6 +5,9 @@ Zappa core library. You may also want to look at `cli.py` and `util.py`.
 ##
 # Imports
 ##
+
+from __future__ import print_function
+
 import getpass
 import glob
 import hashlib
@@ -12,7 +15,6 @@ import json
 import logging
 import os
 import random
-import re
 import shutil
 import string
 import subprocess
@@ -33,6 +35,7 @@ import botocore
 import troposphere
 import troposphere.apigateway
 from botocore.exceptions import ClientError
+from lambda_packages import lambda_packages as lambda_packages_orig
 from tqdm import tqdm
 
 from .utilities import (add_event_source, conflicts_with_a_neighbouring_module,
@@ -40,6 +43,13 @@ from .utilities import (add_event_source, conflicts_with_a_neighbouring_module,
                         get_topic_name, get_venv_from_python_version,
                         human_size, remove_event_source)
 
+try:
+    unicode        # Python 2
+except NameError:
+    unicode = str  # Python 3
+
+# We lower-case lambda package keys to match lower-cased keys in get_installed_packages()
+lambda_packages = {package_name.lower(): val for package_name, val in lambda_packages_orig.items()}
 
 ##
 # Logging Config
@@ -163,35 +173,27 @@ ATTACH_POLICY = """{
 API_GATEWAY_REGIONS = ['us-east-1', 'us-east-2',
                        'us-west-1', 'us-west-2',
                        'eu-central-1',
-                       'eu-north-1',
                        'eu-west-1', 'eu-west-2', 'eu-west-3',
-                       'eu-north-1',
                        'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3',
                        'ap-southeast-1', 'ap-southeast-2',
-                       'ap-east-1',
                        'ap-south-1',
                        'ca-central-1',
                        'cn-north-1',
                        'cn-northwest-1',
-                       'sa-east-1',
-                       'us-gov-east-1', 'us-gov-west-1']
+                       'sa-east-1']
 
 # Latest list: https://docs.aws.amazon.com/general/latest/gr/rande.html#lambda_region
 LAMBDA_REGIONS = ['us-east-1', 'us-east-2',
                   'us-west-1', 'us-west-2',
                   'eu-central-1',
-                  'eu-north-1',
                   'eu-west-1', 'eu-west-2', 'eu-west-3',
-                  'eu-north-1',
                   'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3',
                   'ap-southeast-1', 'ap-southeast-2',
-                  'ap-east-1',
                   'ap-south-1',
                   'ca-central-1',
                   'cn-north-1',
                   'cn-northwest-1',
                   'sa-east-1',
-                  'us-gov-east-1',
                   'us-gov-west-1']
 
 # We never need to include these.
@@ -212,7 +214,7 @@ ALB_LAMBDA_ALIAS = 'current-alb-version'
 # Classes
 ##
 
-class Zappa:
+class Zappa(object):
     """
     Zappa!
 
@@ -247,7 +249,7 @@ class Zappa:
             load_credentials=True,
             desired_role_name=None,
             desired_role_arn=None,
-            runtime='python3.6', # Detected at runtime in CLI
+            runtime='python2.7', # Detected at runtime in CLI
             tags=(),
             endpoint_urls={},
             xray_tracing=False
@@ -272,19 +274,12 @@ class Zappa:
 
         self.runtime = runtime
 
-        if self.runtime == 'python3.6':
-            self.manylinux_suffix_start = 'cp36m'
-        elif self.runtime == 'python3.7':
-            self.manylinux_suffix_start = 'cp37m'
+        if self.runtime == 'python2.7':
+            self.manylinux_wheel_file_suffix = 'cp27mu-manylinux1_x86_64.whl'
+        elif self.runtime == 'python3.6':
+            self.manylinux_wheel_file_suffix = 'cp36m-manylinux1_x86_64.whl'
         else:
-            # The 'm' has been dropped in python 3.8+ since builds with and without pymalloc are ABI compatible
-            # See https://github.com/pypa/manylinux for a more detailed explanation
-            self.manylinux_suffix_start = 'cp38'
-
-        # AWS Lambda supports manylinux1/2010 and manylinux2014
-        manylinux_suffixes = ("2014", "2010", "1")
-        self.manylinux_wheel_file_match = re.compile(f'^.*{self.manylinux_suffix_start}-manylinux({"|".join(manylinux_suffixes)})_x86_64.whl$')
-        self.manylinux_wheel_abi3_file_match = re.compile(f'^.*cp3.-abi3-manylinux({"|".join(manylinux_suffixes)})_x86_64.whl$')
+            self.manylinux_wheel_file_suffix = 'cp37m-manylinux1_x86_64.whl'
 
         self.endpoint_urls = endpoint_urls
         self.xray_tracing = xray_tracing
@@ -471,7 +466,6 @@ class Zappa:
                             slim_handler=False,
                             minify=True,
                             exclude=None,
-                            exclude_glob=None,
                             use_precompiled_packages=True,
                             include=None,
                             venv=None,
@@ -510,9 +504,6 @@ class Zappa:
         # Files that should be excluded from the zip
         if exclude is None:
             exclude = list()
-
-        if exclude_glob is None:
-            exclude_glob = list()
 
         # Exclude the zip itself
         exclude.append(archive_path)
@@ -553,12 +544,6 @@ class Zappa:
                 copytree(cwd, temp_project_path, metadata=False, symlinks=False, ignore=shutil.ignore_patterns(*excludes))
             else:
                 copytree(cwd, temp_project_path, metadata=False, symlinks=False)
-            for glob_path in exclude_glob:
-                for path in glob.glob(os.path.join(temp_project_path, glob_path)):
-                    try:
-                        os.remove(path)
-                    except OSError:  # is a directory
-                        shutil.rmtree(path)
 
         # If a handler_file is supplied, copy that to the root of the package,
         # because that's where AWS Lambda looks for it. It can't be inside a package.
@@ -610,7 +595,7 @@ class Zappa:
         try:
             package_id_file.write(dumped)
         except TypeError: # This is a Python 2/3 issue. TODO: Make pretty!
-            package_id_file.write(str(dumped))
+            package_id_file.write(unicode(dumped))
         package_id_file.close()
 
         # Then, do site site-packages..
@@ -650,25 +635,35 @@ class Zappa:
 
             try:
                 for installed_package_name, installed_package_version in installed_packages.items():
-                    cached_wheel_path = self.get_cached_manylinux_wheel(installed_package_name, installed_package_version, disable_progress)
-                    if cached_wheel_path:
-                        # Otherwise try to use manylinux packages from PyPi..
-                        # Related: https://github.com/Miserlou/Zappa/issues/398
-                        shutil.rmtree(os.path.join(temp_project_path, installed_package_name), ignore_errors=True)
-                        with zipfile.ZipFile(cached_wheel_path) as zfile:
-                            zfile.extractall(temp_project_path)
+                    if self.have_correct_lambda_package_version(installed_package_name, installed_package_version):
+                        print(" - %s==%s: Using precompiled lambda package " % (installed_package_name, installed_package_version,))
+                        self.extract_lambda_package(installed_package_name, temp_project_path)
+                    else:
+                        cached_wheel_path = self.get_cached_manylinux_wheel(installed_package_name, installed_package_version, disable_progress)
+                        if cached_wheel_path:
+                            # Otherwise try to use manylinux packages from PyPi..
+                            # Related: https://github.com/Miserlou/Zappa/issues/398
+                            shutil.rmtree(os.path.join(temp_project_path, installed_package_name), ignore_errors=True)
+                            with zipfile.ZipFile(cached_wheel_path) as zfile:
+                                zfile.extractall(temp_project_path)
+
+                        elif self.have_any_lambda_package_version(installed_package_name):
+                            # Finally see if we may have at least one version of the package in lambda packages
+                            # Related: https://github.com/Miserlou/Zappa/issues/855
+                            lambda_version = lambda_packages[installed_package_name][self.runtime]['version']
+                            print(" - %s==%s: Warning! Using precompiled lambda package version %s instead!" % (installed_package_name, installed_package_version, lambda_version, ))
+                            self.extract_lambda_package(installed_package_name, temp_project_path)
+
+                # This is a special case!
+                # SQLite3 is part of the _system_ Python, not a package. Still, it lives in `lambda-packages`.
+                # Everybody on Python3 gets it!
+                if self.runtime in ("python3.6", "python3.7"):
+                    print(" - sqlite==python3: Using precompiled lambda package")
+                    self.extract_lambda_package('sqlite3', temp_project_path)
 
             except Exception as e:
                 print(e)
                 # XXX - What should we do here?
-
-        # Cleanup
-        for glob_path in exclude_glob:
-            for path in glob.glob(os.path.join(temp_project_path, glob_path)):
-                try:
-                    os.remove(path)
-                except OSError:  # is a directory
-                    shutil.rmtree(path)
 
         # Then archive it all up..
         if archive_format == 'zip':
@@ -764,6 +759,19 @@ class Zappa:
 
         return archive_fname
 
+    def extract_lambda_package(self, package_name, path):
+        """
+        Extracts the lambda package into a given path. Assumes the package exists in lambda packages.
+        """
+        lambda_package = lambda_packages[package_name][self.runtime]
+
+        # Trash the local version to help with package space saving
+        shutil.rmtree(os.path.join(path, package_name), ignore_errors=True)
+
+        tar = tarfile.open(lambda_package['path'], mode="r:gz")
+        for member in tar.getmembers():
+            tar.extract(member, path)
+
     @staticmethod
     def get_installed_packages(site_packages, site_packages_64):
         """
@@ -785,6 +793,30 @@ class Zappa:
                               or package.location.lower() in [site_packages.lower(), site_packages_64.lower()]}
 
         return installed_packages
+
+    def have_correct_lambda_package_version(self, package_name, package_version):
+        """
+        Checks if a given package version binary should be copied over from lambda packages.
+        package_name should be lower-cased version of package name.
+        """
+        lambda_package_details = lambda_packages.get(package_name, {}).get(self.runtime)
+
+        if lambda_package_details is None:
+            return False
+
+        # Binaries can be compiled for different package versions
+        # Related: https://github.com/Miserlou/Zappa/issues/800
+        if package_version != lambda_package_details['version']:
+            return False
+
+        return True
+
+    def have_any_lambda_package_version(self, package_name):
+        """
+        Checks if a given package has any lambda package version. We can try and use it with a warning.
+        package_name should be lower-cased version of package name.
+        """
+        return lambda_packages.get(package_name, {}).get(self.runtime) is not None
 
     @staticmethod
     def download_url_with_progress(url, stream, disable_progress):
@@ -808,32 +840,26 @@ class Zappa:
         Gets the locally stored version of a manylinux wheel. If one does not exist, the function downloads it.
         """
         cached_wheels_dir = os.path.join(tempfile.gettempdir(), 'cached_wheels')
-
         if not os.path.isdir(cached_wheels_dir):
             os.makedirs(cached_wheels_dir)
+
+        wheel_file = '{0!s}-{1!s}-{2!s}'.format(package_name, package_version, self.manylinux_wheel_file_suffix)
+        wheel_path = os.path.join(cached_wheels_dir, wheel_file)
+
+        if not os.path.exists(wheel_path) or not zipfile.is_zipfile(wheel_path):
+            # The file is not cached, download it.
+            wheel_url = self.get_manylinux_wheel_url(package_name, package_version)
+            if not wheel_url:
+                return None
+
+            print(" - {}=={}: Downloading".format(package_name, package_version))
+            with open(wheel_path, 'wb') as f:
+                self.download_url_with_progress(wheel_url, f, disable_progress)
+
+            if not zipfile.is_zipfile(wheel_path):
+                return None
         else:
-            # Check if we already have a cached copy
-            wheel_name = re.sub("[^\w\d.]+", "_", package_name, re.UNICODE)
-            wheel_file = f'{wheel_name}-{package_version}-*_x86_64.whl'
-            wheel_path = os.path.join(cached_wheels_dir, wheel_file)
-
-            for pathname in glob.iglob(wheel_path):
-                if re.match(self.manylinux_wheel_file_match, pathname) or re.match(self.manylinux_wheel_abi3_file_match, pathname):
-                    print(f" - {package_name}=={package_version}: Using locally cached manylinux wheel")
-                    return pathname
-
-        # The file is not cached, download it.
-        wheel_url, filename = self.get_manylinux_wheel_url(package_name, package_version)
-        if not wheel_url:
-            return None
-
-        wheel_path = os.path.join(cached_wheels_dir, filename)
-        print(f" - {package_name}=={package_version}: Downloading")
-        with open(wheel_path, 'wb') as f:
-            self.download_url_with_progress(wheel_url, f, disable_progress)
-
-        if not zipfile.is_zipfile(wheel_path):
-            return None
+            print(" - {}=={}: Using locally cached manylinux wheel".format(package_name, package_version))
 
         return wheel_path
 
@@ -869,20 +895,18 @@ class Zappa:
                 res = requests.get(url, timeout=float(os.environ.get('PIP_TIMEOUT', 1.5)))
                 data = res.json()
             except Exception as e: # pragma: no cover
-                return None, None
+                return None
             with open(json_file_path, 'wb') as metafile:
                 jsondata = json.dumps(data)
                 metafile.write(bytes(jsondata, "utf-8"))
 
         if package_version not in data['releases']:
-            return None, None
+            return None
 
         for f in data['releases'][package_version]:
-            if re.match(self.manylinux_wheel_file_match, f['filename']):
-                return f['url'], f['filename']
-            elif re.match(self.manylinux_wheel_abi3_file_match, f['filename']):
-                return f['url'], f['filename']
-        return None, None
+            if f['filename'].endswith(self.manylinux_wheel_file_suffix):
+                return f['url']
+        return None
 
     ##
     # S3
@@ -1014,14 +1038,12 @@ class Zappa:
                                 publish=True,
                                 vpc_config=None,
                                 dead_letter_config=None,
-                                runtime='python3.6',
+                                runtime='python2.7',
                                 aws_environment_variables=None,
                                 aws_kms_key_arn=None,
                                 xray_tracing=False,
                                 local_zip=None,
                                 use_alb=False,
-                                layers=None,
-                                concurrency=None,
                             ):
         """
         Given a bucket and key (or a local path) of a valid Lambda-zip, a function name and a handler, register that Lambda function.
@@ -1036,8 +1058,6 @@ class Zappa:
             aws_environment_variables = {}
         if not aws_kms_key_arn:
             aws_kms_key_arn = ''
-        if not layers:
-            layers = []
 
         kwargs = dict(
             FunctionName=function_name,
@@ -1054,8 +1074,7 @@ class Zappa:
             KMSKeyArn=aws_kms_key_arn,
             TracingConfig={
                 'Mode': 'Active' if self.xray_tracing else 'PassThrough'
-            },
-            Layers=layers
+            }
         )
         if local_zip:
             kwargs['Code'] = {
@@ -1068,6 +1087,7 @@ class Zappa:
             }
 
         response = self.lambda_client.create_function(**kwargs)
+
         resource_arn = response['FunctionArn']
         version = response['Version']
 
@@ -1086,15 +1106,9 @@ class Zappa:
         if self.tags:
             self.lambda_client.tag_resource(Resource=resource_arn, Tags=self.tags)
 
-        if concurrency is not None:
-            self.lambda_client.put_function_concurrency(
-                FunctionName=resource_arn,
-                ReservedConcurrentExecutions=concurrency,
-            )
-
         return resource_arn
 
-    def update_lambda_function(self, bucket, function_name, s3_key=None, publish=True, local_zip=None, num_revisions=None, concurrency=None):
+    def update_lambda_function(self, bucket, function_name, s3_key=None, publish=True, local_zip=None, num_revisions=None):
         """
         Given a bucket and key (or a local path) of a valid Lambda-zip, a function name and a handler, update that Lambda function's code.
         Optionally, delete previous versions if they exceed the optional limit.
@@ -1139,16 +1153,6 @@ class Zappa:
                 Name=ALB_LAMBDA_ALIAS,
             )
 
-        if concurrency is not None:
-            self.lambda_client.put_function_concurrency(
-                FunctionName=function_name,
-                ReservedConcurrentExecutions=concurrency,
-            )
-        else:
-            self.lambda_client.delete_function_concurrency(
-                FunctionName=function_name
-            )
-
         if num_revisions:
             # Find the existing revision IDs for the given function
             # Related: https://github.com/Miserlou/Zappa/issues/1402
@@ -1176,10 +1180,9 @@ class Zappa:
                                         memory_size=512,
                                         publish=True,
                                         vpc_config=None,
-                                        runtime='python3.6',
+                                        runtime='python2.7',
                                         aws_environment_variables=None,
-                                        aws_kms_key_arn=None,
-                                        layers=None
+                                        aws_kms_key_arn=None
                                     ):
         """
         Given an existing function ARN, update the configuration variables.
@@ -1194,8 +1197,6 @@ class Zappa:
             aws_kms_key_arn = ''
         if not aws_environment_variables:
             aws_environment_variables = {}
-        if not layers:
-            layers = []
 
         # Check if there are any remote aws lambda env vars so they don't get trashed.
         # https://github.com/Miserlou/Zappa/issues/987,  Related: https://github.com/Miserlou/Zappa/issues/765
@@ -1220,8 +1221,7 @@ class Zappa:
             KMSKeyArn=aws_kms_key_arn,
             TracingConfig={
                 'Mode': 'Active' if self.xray_tracing else 'PassThrough'
-            },
-            Layers=layers
+            }
         )
 
         resource_arn = response['FunctionArn']
@@ -1334,10 +1334,6 @@ class Zappa:
             alb_vpc_config["SecurityGroupIds"] = []
         if not alb_vpc_config.get('CertificateArn'):
             raise EnvironmentError('When creating an ALB, you must supply a CertificateArn for the HTTPS listener.')
-
-        # Related: https://github.com/Miserlou/Zappa/issues/1856
-        if 'Scheme' not in alb_vpc_config:
-            alb_vpc_config["Scheme"] = "internet-facing"
         print("Deploying ALB infrastructure...")
 
         # Create load balancer
@@ -1346,7 +1342,8 @@ class Zappa:
             Name=lambda_name,
             Subnets=alb_vpc_config["SubnetIds"],
             SecurityGroups=alb_vpc_config["SecurityGroupIds"],
-            Scheme=alb_vpc_config["Scheme"],
+            # TODO: Scheme can also be "internal" we need to add a new option for this.
+            Scheme="internet-facing",
             # TODO: Tags might be a useful means of stock-keeping zappa-generated assets.
             #Tags=[],
             Type="application",
@@ -1362,8 +1359,6 @@ class Zappa:
         load_balancer_dns = response["LoadBalancers"][0]["DNSName"]
         load_balancer_vpc = response["LoadBalancers"][0]["VpcId"]
         waiter = self.elbv2_client.get_waiter('load_balancer_available')
-        print('Waiting for load balancer [{}] to become active..'.format(load_balancer_arn))
-        waiter.wait(LoadBalancerArns=[load_balancer_arn], WaiterConfig={"Delay": 3})
 
         # Match the lambda timeout on the load balancer.
         self.elbv2_client.modify_load_balancer_attributes(
@@ -2055,7 +2050,7 @@ class Zappa:
                        'EmailConfiguration', 'SmsConfiguration', 'UserPoolTags',
                        'AdminCreateUserConfig'):
                 description_kwargs[key] = value
-            elif key == 'LambdaConfig':
+            elif key is 'LambdaConfig':
                 for lckey, lcvalue in value.items():
                     if lckey in LambdaConfig:
                         value[lckey] = LambdaConfig[lckey]
@@ -2063,13 +2058,6 @@ class Zappa:
                 description_kwargs[key] = value
         if 'LambdaConfig' not in description_kwargs:
             description_kwargs['LambdaConfig'] = LambdaConfig
-        if 'TemporaryPasswordValidityDays' in description_kwargs['Policies']['PasswordPolicy']:
-            description_kwargs['AdminCreateUserConfig'].pop(
-                'UnusedAccountValidityDays', None)
-        if 'UnusedAccountValidityDays' in description_kwargs['AdminCreateUserConfig']:
-            description_kwargs['Policies']['PasswordPolicy']\
-                ['TemporaryPasswordValidityDays'] = description_kwargs['AdminCreateUserConfig'].pop(
-                'UnusedAccountValidityDays', None)
         result = self.cognito_client.update_user_pool(UserPoolId=user_pool, **description_kwargs)
         if result['ResponseMetadata']['HTTPStatusCode'] != 200:
             print("Cognito:  Failed to update user pool", result)
